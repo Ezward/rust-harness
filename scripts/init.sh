@@ -3,36 +3,55 @@ set -euo pipefail
 
 # ── Argument validation ──────────────────────────────────────────────────────
 if [ $# -ne 1 ]; then
-  echo "Usage: $0 <github-repo-name>"
+  echo "Usage: $0 <owner/repo>"
   echo "  e.g. $0 myuser/my-rust-project"
   exit 1
 fi
 
 REPO_NAME="$1"
+
+if [[ "$REPO_NAME" != */* ]]; then
+  echo "Error: repository name must be in 'owner/repo' format (e.g. myuser/my-rust-project)"
+  echo "       Got: $REPO_NAME"
+  exit 1
+fi
 PROJECT_DIR="$(pwd)"
 TOOLS_DIR="$PROJECT_DIR/tools"
 
 # ── Ask for GitHub fine-grained access token ─────────────────────────────────
-read -rsp "Enter your GitHub fine-grained access token: " GH_TOKEN
-echo
-if [ -z "$GH_TOKEN" ]; then
-  echo "Error: token cannot be empty"
-  exit 1
+if [ -n "${GH_TOKEN:-}" ]; then
+  echo "==> Using GH_TOKEN from environment."
+else
+  read -rsp "Enter your GitHub fine-grained access token: " GH_TOKEN
+  echo
+  if [ -z "$GH_TOKEN" ]; then
+    echo "Error: token cannot be empty"
+    exit 1
+  fi
+  export GH_TOKEN
 fi
-
-export GH_TOKEN
 export GITHUB_TOKEN="$GH_TOKEN"
 
 # ── Initialize git ───────────────────────────────────────────────────────────
-echo "==> Initializing git repository..."
-git init
-git checkout -b main 2>/dev/null || git switch -c main 2>/dev/null || true
+if [ -d "$PROJECT_DIR/.git" ]; then
+  echo "==> Git repository already initialized, skipping."
+else
+  echo "==> Initializing git repository..."
+  git init
+  git checkout -b main 2>/dev/null || git switch -c main 2>/dev/null || true
+fi
 
 # ── Create tools folder and install gh CLI ───────────────────────────────────
 echo "==> Setting up tools directory..."
 mkdir -p "$TOOLS_DIR"
 
-if ! command -v gh &>/dev/null && [ ! -f "$TOOLS_DIR/gh" ]; then
+if command -v gh &>/dev/null; then
+  GH_CMD="$(command -v gh)"
+  echo "==> GitHub CLI already available at: $GH_CMD"
+elif [ -f "$TOOLS_DIR/gh" ]; then
+  GH_CMD="$TOOLS_DIR/gh"
+  echo "==> GitHub CLI already installed at: $GH_CMD"
+else
   echo "==> Installing GitHub CLI into tools/..."
   OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
   ARCH="$(uname -m)"
@@ -48,19 +67,20 @@ if ! command -v gh &>/dev/null && [ ! -f "$TOOLS_DIR/gh" ]; then
   chmod +x "$TOOLS_DIR/gh"
   rm -rf "/tmp/${GH_ARCHIVE}" "/tmp/gh_${GH_VERSION}_${OS}_${ARCH}"
   GH_CMD="$TOOLS_DIR/gh"
-else
-  GH_CMD="$(command -v gh 2>/dev/null || echo "$TOOLS_DIR/gh")"
+  echo "==> GitHub CLI installed at: $GH_CMD"
 fi
 
-echo "==> Using gh at: $GH_CMD"
 # GH_TOKEN env var is used directly by gh for authentication
 
 # ── Initialize Cargo project ─────────────────────────────────────────────────
-echo "==> Initializing Cargo project..."
-cargo init --name "$(basename "$PROJECT_DIR")"
+if [ -f "$PROJECT_DIR/Cargo.toml" ]; then
+  echo "==> Cargo project already initialized, skipping."
+else
+  echo "==> Initializing Cargo project..."
+  cargo init --name "$(basename "$PROJECT_DIR")"
 
-# Replace default main.rs with a testable version for 100% coverage
-cat > "$PROJECT_DIR/src/main.rs" <<'MAINRS'
+  # Replace default main.rs with a testable version for 100% coverage
+  cat > "$PROJECT_DIR/src/main.rs" <<'MAINRS'
 fn run() -> String {
     "Hello, world!".to_string()
 }
@@ -81,37 +101,49 @@ mod tests {
 }
 MAINRS
 
-# Allow the coverage cfg used by cargo-llvm-cov
-cat >> "$PROJECT_DIR/Cargo.toml" <<'CARGOCFG'
+  # Allow the coverage cfg used by cargo-llvm-cov
+  cat >> "$PROJECT_DIR/Cargo.toml" <<'CARGOCFG'
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 CARGOCFG
+fi
 
 # ── Rust toolchain setup ─────────────────────────────────────────────────────
-echo "==> Setting up Rust stable toolchain..."
+echo "==> Ensuring Rust stable toolchain..."
 rustup default stable
 rustup update stable
 
-echo "==> Installing clippy..."
+echo "==> Ensuring clippy is installed..."
 rustup component add clippy
 
-echo "==> Installing cargo-llvm-cov..."
-cargo install cargo-llvm-cov
+if cargo llvm-cov --version &>/dev/null; then
+  echo "==> cargo-llvm-cov already installed."
+else
+  echo "==> Installing cargo-llvm-cov..."
+  cargo install cargo-llvm-cov
+fi
 
-echo "==> Installing cross-compilation targets..."
+echo "==> Ensuring cross-compilation targets..."
 rustup target add x86_64-unknown-linux-gnu
 rustup target add aarch64-unknown-linux-gnu
 
 # ── Cargo format configuration (120 char line length) ────────────────────────
-echo "==> Creating rustfmt.toml..."
-cat > "$PROJECT_DIR/rustfmt.toml" <<'RUSTFMT'
+if [ -f "$PROJECT_DIR/rustfmt.toml" ]; then
+  echo "==> rustfmt.toml already exists, skipping."
+else
+  echo "==> Creating rustfmt.toml..."
+  cat > "$PROJECT_DIR/rustfmt.toml" <<'RUSTFMT'
 max_width = 120
 RUSTFMT
+fi
 
 # ── Create scripts/check.sh ─────────────────────────────────────────────────
-echo "==> Creating scripts/check.sh..."
-cat > "$PROJECT_DIR/scripts/check.sh" <<'CHECKSH'
+if [ -f "$PROJECT_DIR/scripts/check.sh" ]; then
+  echo "==> scripts/check.sh already exists, skipping."
+else
+  echo "==> Creating scripts/check.sh..."
+  cat > "$PROJECT_DIR/scripts/check.sh" <<'CHECKSH'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -134,11 +166,15 @@ cargo fmt -- --check
 
 echo "==> All checks passed!"
 CHECKSH
-chmod +x "$PROJECT_DIR/scripts/check.sh"
+  chmod +x "$PROJECT_DIR/scripts/check.sh"
+fi
 
 # ── .gitignore ───────────────────────────────────────────────────────────────
-echo "==> Creating .gitignore..."
-cat > "$PROJECT_DIR/.gitignore" <<'GITIGNORE'
+if [ -f "$PROJECT_DIR/.gitignore" ]; then
+  echo "==> .gitignore already exists, skipping."
+else
+  echo "==> Creating .gitignore..."
+  cat > "$PROJECT_DIR/.gitignore" <<'GITIGNORE'
 # Rust / Cargo
 /target/
 **/*.rs.bk
@@ -161,11 +197,15 @@ Thumbs.db
 # Environment
 .env
 GITIGNORE
+fi
 
 # ── README.md ────────────────────────────────────────────────────────────────
-echo "==> Creating README.md..."
-REPO_BASENAME="$(basename "$REPO_NAME")"
-cat > "$PROJECT_DIR/README.md" <<README
+if [ -f "$PROJECT_DIR/README.md" ]; then
+  echo "==> README.md already exists, skipping."
+else
+  echo "==> Creating README.md..."
+  REPO_BASENAME="$(basename "$REPO_NAME")"
+  cat > "$PROJECT_DIR/README.md" <<README
 # $REPO_BASENAME
 
 A Rust project initialized with the claude-code harness.
@@ -187,22 +227,30 @@ This runs:
 - Test coverage (must be 100%)
 - Format checking
 README
+fi
 
 # ── Git pre-commit hook ──────────────────────────────────────────────────────
-echo "==> Creating git pre-commit hook..."
-mkdir -p "$PROJECT_DIR/.git/hooks"
-cat > "$PROJECT_DIR/.git/hooks/pre-commit" <<'HOOK'
+if [ -f "$PROJECT_DIR/.git/hooks/pre-commit" ]; then
+  echo "==> Git pre-commit hook already exists, skipping."
+else
+  echo "==> Creating git pre-commit hook..."
+  mkdir -p "$PROJECT_DIR/.git/hooks"
+  cat > "$PROJECT_DIR/.git/hooks/pre-commit" <<'HOOK'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "Running pre-commit checks..."
 exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
 HOOK
-chmod +x "$PROJECT_DIR/.git/hooks/pre-commit"
+  chmod +x "$PROJECT_DIR/.git/hooks/pre-commit"
+fi
 
 # ── GitHub Actions workflow ──────────────────────────────────────────────────
-echo "==> Creating GitHub Actions CI workflow..."
-mkdir -p "$PROJECT_DIR/.github/workflows"
-cat > "$PROJECT_DIR/.github/workflows/ci.yml" <<'CIWORKFLOW'
+if [ -f "$PROJECT_DIR/.github/workflows/ci.yml" ]; then
+  echo "==> GitHub Actions CI workflow already exists, skipping."
+else
+  echo "==> Creating GitHub Actions CI workflow..."
+  mkdir -p "$PROJECT_DIR/.github/workflows"
+  cat > "$PROJECT_DIR/.github/workflows/ci.yml" <<'CIWORKFLOW'
 name: CI
 
 on:
@@ -226,11 +274,15 @@ jobs:
       - name: Run checks
         run: ./scripts/check.sh
 CIWORKFLOW
+fi
 
 # ── Claude Code hooks ────────────────────────────────────────────────────────
-echo "==> Creating Claude Code hooks configuration..."
-mkdir -p "$PROJECT_DIR/.claude"
-cat > "$PROJECT_DIR/.claude/settings.json" <<'CLAUDESETTINGS'
+if [ -f "$PROJECT_DIR/.claude/settings.json" ]; then
+  echo "==> Claude Code hooks configuration already exists, skipping."
+else
+  echo "==> Creating Claude Code hooks configuration..."
+  mkdir -p "$PROJECT_DIR/.claude"
+  cat > "$PROJECT_DIR/.claude/settings.json" <<'CLAUDESETTINGS'
 {
   "hooks": {
     "PostToolUse": [
@@ -278,17 +330,28 @@ cat > "$PROJECT_DIR/.claude/settings.json" <<'CLAUDESETTINGS'
   }
 }
 CLAUDESETTINGS
+fi
 
-# ── .file-guard to protect .git/hooks ────────────────────────────────────────
-echo "==> Creating .file-guard to protect .git/hooks..."
-cat > "$PROJECT_DIR/.file-guard" <<'FILEGUARD'
+# ── .file-guard to protect .git/hooks and scripts ────────────────────────────
+if [ -f "$PROJECT_DIR/.file-guard" ]; then
+  echo "==> .file-guard already exists, skipping."
+else
+  echo "==> Creating .file-guard to protect .git/hooks and scripts..."
+  cat > "$PROJECT_DIR/.file-guard" <<'FILEGUARD'
 .git/hooks
+scripts/init.sh
+scripts/check.sh
+scripts/verify-repo-security.sh
 FILEGUARD
+fi
 
 # ── Initial commit ───────────────────────────────────────────────────────────
-echo "==> Creating initial commit..."
-git add -A
-git commit -m "Initial project setup with Rust harness
+if git log --oneline -1 &>/dev/null; then
+  echo "==> Git history already exists, skipping initial commit."
+else
+  echo "==> Creating initial commit..."
+  git add -A
+  git commit -m "Initial project setup with Rust harness
 
 - Cargo project with stable toolchain
 - clippy, cargo-llvm-cov, rustfmt configured
@@ -298,71 +361,25 @@ git commit -m "Initial project setup with Rust harness
 - GitHub Actions CI workflow for PRs
 - Claude Code hooks for automated checks and GitHub auth
 - .file-guard protecting .git/hooks"
+fi
 
 # ── Connect to origin and push ───────────────────────────────────────────────
-echo "==> Connecting to origin: $REPO_NAME..."
-git remote add origin "https://github.com/${REPO_NAME}.git"
-git push -u origin main
-
-# ── Wait for push to complete and verify branch protections ──────────────────
-echo "==> Verifying GitHub repository branch protections..."
-echo "    Checking that 'main' branch has the required protections..."
-
-PROTECTION_ERRORS=()
-
-# Fetch branch protection rules
-PROTECTION=$("$GH_CMD" api "repos/${REPO_NAME}/branches/main/protection" 2>&1) || {
-  echo "ERROR: Could not fetch branch protection rules for 'main'."
-  echo "       Please ensure branch protection is configured on GitHub."
-  echo "       Response: $PROTECTION"
-  exit 1
-}
-
-# Check: Restrict creations/updates/deletions (enforce_admins or restrictions)
-if echo "$PROTECTION" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('enforce_admins',{}).get('enabled', False)" 2>/dev/null; then
-  echo "    [OK] Admin enforcement is enabled"
+if git remote get-url origin &>/dev/null; then
+  echo "==> Origin remote already configured, skipping."
 else
-  PROTECTION_ERRORS+=("Enforce admins (restrict creations/updates/deletions) is NOT enabled")
+  echo "==> Connecting to origin: $REPO_NAME..."
+  git remote add origin "https://github.com/${REPO_NAME}.git"
 fi
 
-# Check: Require pull request before merging
-PR_REVIEWS=$(echo "$PROTECTION" | python3 -c "import sys,json; d=json.load(sys.stdin); pr=d.get('required_pull_request_reviews'); print('yes' if pr else 'no')" 2>/dev/null)
-if [ "$PR_REVIEWS" = "yes" ]; then
-  echo "    [OK] Pull request reviews are required"
+if git rev-parse --verify origin/main &>/dev/null; then
+  echo "==> Main branch already pushed to origin, skipping push."
 else
-  PROTECTION_ERRORS+=("Require a pull request before merging is NOT configured")
+  echo "==> Pushing to origin..."
+  git push -u origin main
 fi
 
-# Check: Require at least one approval
-APPROVAL_COUNT=$(echo "$PROTECTION" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('required_pull_request_reviews',{}).get('required_approving_review_count',0))" 2>/dev/null)
-if [ "$APPROVAL_COUNT" -ge 1 ] 2>/dev/null; then
-  echo "    [OK] At least $APPROVAL_COUNT approval(s) required"
-else
-  PROTECTION_ERRORS+=("Require at least one approval is NOT configured (found: ${APPROVAL_COUNT:-0})")
-fi
-
-# Check: Require approval of the most recent reviewable push
-DISMISS_STALE=$(echo "$PROTECTION" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('required_pull_request_reviews',{}).get('dismiss_stale_reviews', False))" 2>/dev/null)
-if [ "$DISMISS_STALE" = "True" ]; then
-  echo "    [OK] Dismiss stale reviews on new pushes is enabled"
-else
-  PROTECTION_ERRORS+=("Dismiss stale reviews (require approval of most recent push) is NOT enabled")
-fi
-
-if [ ${#PROTECTION_ERRORS[@]} -gt 0 ]; then
-  echo ""
-  echo "WARNING: The following branch protection rules are NOT in place:"
-  for err in "${PROTECTION_ERRORS[@]}"; do
-    echo "  - $err"
-  done
-  echo ""
-  echo "Please configure these protections in GitHub repository settings:"
-  echo "  https://github.com/${REPO_NAME}/settings/branches"
-  exit 1
-else
-  echo ""
-  echo "All branch protections are correctly configured!"
-fi
+# ── Verify branch protections ────────────────────────────────────────────────
+"$PROJECT_DIR/scripts/verify-repo-security.sh" "$REPO_NAME"
 
 echo ""
 echo "==> Initialization complete! Repository is ready for development."
