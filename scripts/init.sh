@@ -332,13 +332,16 @@ else
 CLAUDESETTINGS
 fi
 
-# ── .file-guard to protect .git/hooks ────────────────────────────────────────
+# ── .file-guard to protect .git/hooks and scripts ────────────────────────────
 if [ -f "$PROJECT_DIR/.file-guard" ]; then
   echo "==> .file-guard already exists, skipping."
 else
-  echo "==> Creating .file-guard to protect .git/hooks..."
+  echo "==> Creating .file-guard to protect .git/hooks and scripts..."
   cat > "$PROJECT_DIR/.file-guard" <<'FILEGUARD'
 .git/hooks
+scripts/init.sh
+scripts/check.sh
+scripts/verify-repo-security.sh
 FILEGUARD
 fi
 

@@ -1,1 +1,4 @@
 .git/hooks
+scripts/init.sh
+scripts/check.sh
+scripts/verify-repo-security.sh
