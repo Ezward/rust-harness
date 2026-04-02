@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "changed_files=$(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null); if echo \"$changed_files\" | grep -q '\\.rs$'; then ./scripts/check.sh 2>&1; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q '.git/hooks'; then echo '{\"decision\": \"block\", \"reason\": \"Modifications to .git/hooks are not allowed\"}'; fi"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Please provide your GitHub fine-grained access token to enable GitHub access for this session.' && read -rsp 'GitHub Token: ' token && echo && export GH_TOKEN=\"$token\" && export GITHUB_TOKEN=\"$token\" && echo \"$token\" | gh auth login --with-token 2>/dev/null && echo 'GitHub authenticated successfully.'"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "unset GH_TOKEN && unset GITHUB_TOKEN && gh auth logout --hostname github.com 2>/dev/null; echo 'GitHub token cleared.'"
+          }
+        ]
+      }
+    ]
+  }
+}
