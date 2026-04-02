@@ -11,12 +11,18 @@ set -euo pipefail
 # fine-grained access token that has "Administration: Read" permission.
 
 if [ $# -ne 1 ]; then
-  echo "Usage: $0 <github-repo-name>"
+  echo "Usage: $0 <owner/repo>"
   echo "  e.g. $0 myuser/my-rust-project"
   exit 1
 fi
 
 REPO_NAME="$1"
+
+if [[ "$REPO_NAME" != */* ]]; then
+  echo "Error: repository name must be in 'owner/repo' format (e.g. myuser/my-rust-project)"
+  echo "       Got: $REPO_NAME"
+  exit 1
+fi
 GH_CMD="$(command -v gh 2>/dev/null || echo "$(git rev-parse --show-toplevel 2>/dev/null)/tools/gh")"
 
 echo "==> Verifying GitHub repository branch protections..."
